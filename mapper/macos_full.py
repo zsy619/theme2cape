@@ -141,8 +141,6 @@ MACOS_CURSOR_MAP = {
     "h_double": "com.apple.cursor.19",
     "v_double": "com.apple.cursor.23",
     "double-arrow": "com.apple.cursor.19",  # 默认到水平
-    "sb_h_double_arrow": "com.apple.cursor.19",  # 已在 RESIZE 段,这里重复占位无副作用
-    "sb_v_double_arrow": "com.apple.cursor.23",
     # 角向 8 方向 resize (CSS cursor names)
     "ne-resize": "com.apple.cursor.30",  # 东北角 -> NE-SW 对角线
     "nw-resize": "com.apple.cursor.34",  # 西北角 -> NW-SE 对角线
@@ -154,14 +152,11 @@ MACOS_CURSOR_MAP = {
     "sw_sizegrip": "com.apple.cursor.34",
     # ===== Drag & Drop 扩展 =====
     "dnd-no-drop": "com.apple.cursor.3",  # Vimix: 禁止放置 (与 dnd_no_drop 同义)
-    "dnd-ask": "com.apple.cursor.3",  # 已在 COPY 段
     # ===== 杂项 =====
     "pirate": "com.apple.cursor.3",  # 海盗旗 -> forbidden
-    "circle": "com.apple.cursor.3",  # 已在 COPY 段
     "left_ptr_help": "com.apple.cursor.40",  # 箭头+问号 -> help
     # ===== POOF / SPINNING =====
     "poof": "com.apple.cursor.25",
-    "target": "com.apple.cursor.9",  # Camera 2 (target 已存在,这里给 camera)
     # ===== 32位哈希名(X11 cursor encoding) -> 对应 macOS identifier =====
     # Vimix 主题里有大量 32 位哈希名, 这是 X11 在 1.20+ 引入的 alias 机制
     # 实际指向已通过真实文件 / symlink 表建立, 我们直接用常用编码 → 标准名映射

@@ -19,11 +19,11 @@ success = 0
 failed = 0
 
 for item in THEME_DIR.iterdir():
-
+    # 跳过目录
     if item.is_dir():
-        pass
-
-    elif not any(str(item).endswith(x) for x in SUPPORTED):
+        continue
+    # 跳过非支持的压缩包格式
+    if not any(str(item).endswith(x) for x in SUPPORTED):
         continue
 
     total += 1

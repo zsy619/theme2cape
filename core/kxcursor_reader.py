@@ -211,53 +211,6 @@ def _is_archive(path: Path) -> bool:
     return path.name.lower().endswith(_ARCHIVE_SUFFIXES)
 
 
-def read_xcursor_theme(theme_path: Path, out_root: Path = None):
-    """
-    读取整个 xcursor 主题。theme_path 可以是：
-      - 压缩包（.tar.xz / .tar.gz / .zip / .tar）：自动解压到 out_root/_extracted_<主题名>/ 下
-      - 目录：递归扫描其中所有 xcursor 文件
-      - 单个 xcursor 文件：作为单一光标处理
-
-    支持"多套 cursor 共存"的情况:
-      - 压缩包内如果含多个 cursors/ 目录(PolarCursorTheme/, PolarCursorTheme-Blue/),
-        自动拆成多个主题,每个子目录作为一个独立 Cursor 列表返回
-
-    返回 Cursor 列表 (单套),或 list[Cursor 列表] (多套).
-    调用方通过 cursor_set 是 list[Cursor] 还是 list[list[Cursor]] 区分.
-    """
-    if not theme_path.exists():
-        raise FileNotFoundError(f"theme path not found: {theme_path}")
-
-    # Case 1: 压缩包 -> 解压到 out_root/_extracted_<主题名>/
-    if _is_archive(theme_path):
-        out_root = Path(out_root) if out_root else theme_path.parent
-        out_root.mkdir(parents=True, exist_ok=True)
-        # 从压缩包文件名提取主题名(去掉后缀)
-        name = theme_path.name
-        lower = name.lower()
-        theme_name = name
-        for ext in _ARCHIVE_SUFFIXES:
-            if lower.endswith(ext):
-                theme_name = name[: -len(ext)]
-                break
-        extracted = out_root / f"_extracted_{theme_name}"
-        extracted.mkdir(parents=True, exist_ok=True)
-        if theme_path.name.lower().endswith(".zip"):
-            with zipfile.ZipFile(theme_path) as zf:
-                zf.extractall(extracted)
-        else:
-            with tarfile.open(theme_path) as tf:
-                tf.extractall(extracted)
-        return _read_all_cursors(extracted)
-
-    # Case 2: 已经是目录
-    if theme_path.is_dir():
-        return _read_all_cursors(theme_path)
-
-    # Case 3: 单个文件
-    return [read_xcursor(theme_path)]
-
-
 def _find_cursor_dirs(root: Path) -> list[Path]:
     """
     找根目录下所有的 cursors 子目录.

@@ -237,6 +237,124 @@ def build_cape(
     #         (e.g. Alias → Link, Open → Closed, Counting Down → Wait)
     from collections import defaultdict
 
+    # macOS 全部 cursor identifier (严格按 mapper/macos_full.md 文档)
+    #
+    # 来源 (md 文档三段):
+    #   一、com.apple.coregraphics.* (11 个, 9 经典 + 2 macOS 26 新增)
+    #   二、com.apple.cursor.N       (41 个, N ∈ {2,3,4,5,7..43}, 6 故意空缺)
+    # 合计 52 个 identifier.
+    #
+    # ⚠️ 关键点:
+    #   1) `_ALL_MAC_IDENTIFIERS` 是 "spare 槽位候选池", 用于 `_find_spare_identifier`
+    #      给帧数据不同的同名 X11 cursor 分配独立槽位. 它**不是** cape 文件硬上限.
+    #   2) Mousecape cursorMap 实际容量 = 这个集合的 size = 52. 我们用
+    #      `_ALL_MAC_CAPACITY` 跟踪, Summary 报告里直接用, 不要硬编码 50.
+    #
+    # Window 系列编号说明 (来自 md 文档, **必须严格按此编号**):
+    #   com.apple.cursor.27  Window E       (东向窗口边)
+    #   com.apple.cursor.28  Window E-W     (东西向窗口边)
+    #   com.apple.cursor.29  Window NE      (东北向窗口角)
+    #   com.apple.cursor.30  Window NE-SW   (东北-西南对角线)
+    #   com.apple.cursor.31  Window N       (北向窗口边)
+    #   com.apple.cursor.32  Window N-S     (南北向窗口边)
+    #   com.apple.cursor.33  Window NW      (西北向窗口角)
+    #   com.apple.cursor.34  Window NW-SE   (西北-东南对角线)
+    #   com.apple.cursor.35  Window SE      (东南向窗口角)
+    #   com.apple.cursor.36  Window S       (南向窗口边)
+    #   com.apple.cursor.37  Window SW      (西南向窗口角)
+    #   com.apple.cursor.38  Window W       (西向窗口边)
+    _ALL_MAC_IDENTIFIERS = {
+        # ===== com.apple.coregraphics.* (11 个) =====
+        "com.apple.coregraphics.Arrow",
+        "com.apple.coregraphics.IBeam",
+        "com.apple.coregraphics.IBeamXOR",
+        "com.apple.coregraphics.Alias",
+        "com.apple.coregraphics.Copy",
+        "com.apple.coregraphics.Move",
+        "com.apple.coregraphics.ArrowCtx",
+        "com.apple.coregraphics.Wait",
+        "com.apple.coregraphics.Empty",
+        "com.apple.coregraphics.ArrowS",     # macOS 26 新增: 小尺寸箭头
+        "com.apple.coregraphics.IBeamS",     # macOS 26 新增: 小尺寸 I 型
+
+        # ===== com.apple.cursor.2..5 (4 个) =====
+        "com.apple.cursor.2",   # Link
+        "com.apple.cursor.3",   # Forbidden
+        "com.apple.cursor.4",   # Busy
+        "com.apple.cursor.5",   # Copy Drag
+        # ⚠️ com.apple.cursor.6 故意空缺 (Mousecape cursorMap 没有 N=6)
+
+        # ===== com.apple.cursor.7..16 (10 个) =====
+        "com.apple.cursor.7",   # Crosshair
+        "com.apple.cursor.8",   # Crosshair 2
+        "com.apple.cursor.9",   # Camera 2
+        "com.apple.cursor.10",  # Camera
+        "com.apple.cursor.11",  # Closed (握紧手)
+        "com.apple.cursor.12",  # Open (张开手)
+        "com.apple.cursor.13",  # Pointing (手指指针)
+        "com.apple.cursor.14",  # Counting Up
+        "com.apple.cursor.15",  # Counting Down
+        "com.apple.cursor.16",  # Counting Up/Down
+
+        # ===== com.apple.cursor.17..26 (10 个) =====
+        "com.apple.cursor.17",  # Resize W
+        "com.apple.cursor.18",  # Resize E
+        "com.apple.cursor.19",  # Resize W-E
+        "com.apple.cursor.20",  # Cell XOR
+        "com.apple.cursor.21",  # Resize N
+        "com.apple.cursor.22",  # Resize S
+        "com.apple.cursor.23",  # Resize N-S
+        "com.apple.cursor.24",  # Ctx Menu
+        "com.apple.cursor.25",  # Poof
+        "com.apple.cursor.26",  # IBeam H.
+
+        # ===== com.apple.cursor.27..38 (12 个, Window 系列) =====
+        "com.apple.cursor.27",  # Window E
+        "com.apple.cursor.28",  # Window E-W
+        "com.apple.cursor.29",  # Window NE
+        "com.apple.cursor.30",  # Window NE-SW
+        "com.apple.cursor.31",  # Window N
+        "com.apple.cursor.32",  # Window N-S
+        "com.apple.cursor.33",  # Window NW
+        "com.apple.cursor.34",  # Window NW-SE
+        "com.apple.cursor.35",  # Window SE
+        "com.apple.cursor.36",  # Window S
+        "com.apple.cursor.37",  # Window SW
+        "com.apple.cursor.38",  # Window W
+
+        # ===== com.apple.cursor.39..43 (5 个) =====
+        "com.apple.cursor.39",  # Resize Square
+        "com.apple.cursor.40",  # Help
+        "com.apple.cursor.41",  # Cell
+        "com.apple.cursor.42",  # Zoom In
+        "com.apple.cursor.43",  # Zoom Out
+    }
+    # cape 容量 = 集合大小 (9 coregraphics 经典 + 2 macOS 26 新增 + 41 cursor.N = 52)
+    _ALL_MAC_CAPACITY = len(_ALL_MAC_IDENTIFIERS)
+
+    def _find_spare_identifier(used: set, needed: set) -> str | None:
+        """找一个未使用的 macOS identifier 作为 redistributed 的备用槽位
+
+        策略 (按优先级):
+          1. 优先选 Window 系列 (cursor.27~38), X11 主题永远不会直接提供这些
+          2. 选不在 needed 中且未被 used 的 identifier
+          3. ⚠️ 不抢 needed 中的 identifier (那是主 cursor 的"领地")
+          4. 实在没有返回 None
+        """
+        WINDOW_AND_PRIVATE_PREFERRED = [
+            "com.apple.cursor.27", "com.apple.cursor.28", "com.apple.cursor.29",
+            "com.apple.cursor.31", "com.apple.cursor.32", "com.apple.cursor.33",
+            "com.apple.cursor.35", "com.apple.cursor.36", "com.apple.cursor.37",
+            "com.apple.cursor.38",
+        ]
+        for mac in WINDOW_AND_PRIVATE_PREFERRED:
+            if mac not in used and mac not in needed:
+                return mac
+        for mac in sorted(_ALL_MAC_IDENTIFIERS):
+            if mac not in used and mac not in needed:
+                return mac
+        return None
+
     # 跨 identifier fallback 表: 缺哪个 mac id → 复用哪个 mac id 的帧
     # 基于 macOS 自身默认行为 (System Preferences 找相邻 cursor 兜底)
     CROSS_FALLBACK = {
@@ -261,6 +379,85 @@ def build_cape(
     seen_identifiers: set[str] = set()
     skipped_aliases: list[tuple[str, str]] = []
     fallback_used: list[tuple[str, str, str]] = []  # (src_x11_or_mac, target_x11, kind)
+    redistributed: list[tuple[str, str, str]] = []  # (x11_name, from_mac, to_mac)
+
+    # 同 identifier 内 X11 帧数据指纹分组 (用于判断要不要分到备用槽位)
+    import hashlib
+
+    def _frame_fingerprint(frames_list) -> str:
+        h = hashlib.md5()
+        for f in sorted(frames_list, key=lambda f: (f.width, f.height, f.frame_index)):
+            h.update(f.image_path.encode())
+            h.update(f"{f.width},{f.height},{f.frame_index}".encode())
+        return h.hexdigest()
+
+    # X11 名 → 备用 mac identifier 映射 (按语义相关性分配)
+    SPARE_IDENTIFIER_MAP = {
+        "arrow": "com.apple.cursor.42",
+        "top_left_arrow": "com.apple.cursor.43",
+        "right_ptr": "com.apple.cursor.18",
+        "top_right_arrow": "com.apple.cursor.18",
+        "op_left_arrow": "com.apple.cursor.17",
+        "default": "com.apple.cursor.42",
+        "text": "com.apple.cursor.26",
+        "horizontal-text": "com.apple.cursor.26",
+        "@xterm": "com.apple.cursor.26",
+        "ib": "com.apple.cursor.26",
+        "IBeamXOR": "com.apple.cursor.26",
+        "handwriting": "com.apple.cursor.26",
+        "pencil": "com.apple.cursor.8",
+        "fleur": "com.apple.cursor.39",
+        "all-scroll": "com.apple.cursor.39",
+        "size_all": "com.apple.cursor.39",
+        "scroll-all": "com.apple.cursor.39",
+        "pointer-move": "com.apple.cursor.39",
+        "pointer_move": "com.apple.cursor.39",
+        "sizing": "com.apple.cursor.39",
+        "move": "com.apple.cursor.39",
+        "watch": "com.apple.cursor.4",
+        "left_ptr_watch": "com.apple.cursor.4",
+        "wait": "com.apple.cursor.4",
+        "clock": "com.apple.cursor.4",
+        "dnd-ask": "com.apple.cursor.9",
+        "color-picker": "com.apple.cursor.8",
+        "dnd-copy": "com.apple.cursor.31",
+        "context-menu": "com.apple.cursor.29",
+        "plus": "com.apple.cursor.39",
+    }
+
+    # X11 cursor 优先级 (同一 mac identifier 内, 优先级最高的占主槽位)
+    X11_PRIORITY = {
+        "com.apple.coregraphics.Arrow": ["left_ptr", "arrow", "default", "top_left_arrow", "right_ptr", "top_right_arrow", "op_left_arrow"],
+        "com.apple.coregraphics.IBeam": ["xterm", "ibeam", "text", "horizontal-text", "IBeamXOR", "@xterm", "ib", "handwriting"],
+        "com.apple.coregraphics.Alias": ["alias"],
+        "com.apple.coregraphics.Copy": ["copy"],
+        "com.apple.coregraphics.Move": ["move", "fleur", "all-scroll", "size_all", "scroll-all", "pointer-move", "pointer_move", "sizing"],
+        "com.apple.coregraphics.Wait": ["watch", "wait", "left_ptr_watch", "clock"],
+        "com.apple.cursor.2": ["link", "dnd-link"],
+        "com.apple.cursor.3": ["forbidden", "not-allowed", "crossed_circle", "crossed-circle", "circle", "no-drop", "dnd_no_drop", "dnd-no-drop", "dnd-ask", "pirate", "kill"],
+        "com.apple.cursor.5": ["dnd-copy"],
+        "com.apple.cursor.7": ["crosshair", "cross", "tcross", "center_ptr", "centre_ptr", "cross_reverse", "diamond_cross", "plus", "color-picker", "pencil", "draft", "draft_large", "draft_small", "center_main"],
+        "com.apple.cursor.11": ["grabbing", "closedhand", "dnd-move", "dnd-none", "dragging", "HandSqueezed"],
+        "com.apple.cursor.12": ["grab", "openhand", "dnd-grab", "HandGrab"],
+        "com.apple.cursor.13": ["hand2", "pointer", "pointing_hand", "hand1", "hand", "pointer2", "button"],
+        "com.apple.cursor.15": ["progress"],
+        "com.apple.cursor.16": ["half-busy", "half_busy"],
+        "com.apple.cursor.17": ["w-resize", "left_side", "left-side", "left_tee", "sb_left_arrow", "left-arrow", "left_arrow"],
+        "com.apple.cursor.18": ["e-resize", "right_side", "right-side", "right_tee", "sb_right_arrow", "right-arrow", "right_arrow"],
+        "com.apple.cursor.19": ["sb_h_double_arrow", "size_hor", "size-hor", "ew-resize", "h_double_arrow", "split_h", "h_double", "double-arrow", "double_arrow", "HDoubleArrow", "col-resize"],
+        "com.apple.cursor.21": ["n-resize", "top_side", "top-side", "top_tee", "sb_up_arrow", "up-arrow", "up_arrow", "based_arrow_up", "base_arrow_up"],
+        "com.apple.cursor.22": ["s-resize", "bottom_side", "bottom-side", "bottom_tee", "sb_down_arrow", "down-arrow", "down_arrow", "based_arrow_down", "base_arrow_down"],
+        "com.apple.cursor.23": ["sb_v_double_arrow", "size_ver", "size-ver", "ns-resize", "v_double_arrow", "split_v", "v_double", "VDoubleArrow", "row-resize"],
+        "com.apple.cursor.24": ["context-menu"],
+        "com.apple.cursor.26": ["vertical-text", "text_vertical"],
+        "com.apple.cursor.30": ["fd_double_arrow", "size_bdiag", "size-bdiag", "nesw-resize", "ne-resize", "se-resize", "bottom_left_corner", "top_right_corner", "ur_angle", "ll_angle", "SizeNESW_Down"],
+        "com.apple.cursor.34": ["bd_double_arrow", "size_fdiag", "size-fdiag", "nwse-resize", "nw-resize", "sw-resize", "top_left_corner", "bottom_right_corner", "ul_angle", "lr_angle"],
+        "com.apple.cursor.40": ["question_arrow", "question-arrow", "help", "whats_this", "left_ptr_help"],
+        "com.apple.cursor.41": ["cell", "dotbox", "dot_box", "dot_box_mask", "icon", "target", "draped_box", "dot", "person"],
+        "com.apple.cursor.42": ["zoom-in", "zoom_in", "zoomIn"],
+        "com.apple.cursor.43": ["zoom-out", "zoom_out", "zoomOut"],
+    }
+
 
     # 先收集所有"应有"的 mac identifier (从 cursor_set 的 mac_name + cross fallback 反推)
     all_needed_macs = set()
@@ -276,8 +473,44 @@ def build_cape(
         frames = c.get("frames", [])
 
         if identifier in seen_identifiers:
-            skipped_aliases.append((x11_name, identifier))
-            continue
+            # 帧数据不同 → 尝试分配到备用 identifier (redistributed)
+            if frames:
+                current_fp = _frame_fingerprint(frames)
+                # 检查这个 identifier 下, 已存在的帧指纹 (按优先级最高的)
+                priority_list = X11_PRIORITY.get(identifier, [])
+                best_fp = None
+                for pname in priority_list:
+                    for src in frames_by_mac.get(identifier, []):
+                        if src["x11"] == pname and src["frames"]:
+                            best_fp = _frame_fingerprint(src["frames"])
+                            break
+                    if best_fp:
+                        break
+                if best_fp is None:
+                    for src in frames_by_mac.get(identifier, []):
+                        if src["frames"]:
+                            best_fp = _frame_fingerprint(src["frames"])
+                            break
+                # 帧数据不同 → 尝试备用槽位
+                if best_fp and current_fp != best_fp:
+                    spare_mac = SPARE_IDENTIFIER_MAP.get(x11_name)
+                    if spare_mac and spare_mac not in seen_identifiers:
+                        identifier = spare_mac
+                        redistributed.append((x11_name, c["mac_name"], spare_mac))
+                    else:
+                        auto_spare = _find_spare_identifier(seen_identifiers, all_needed_macs)
+                        if auto_spare:
+                            identifier = auto_spare
+                            redistributed.append((x11_name, c["mac_name"], auto_spare))
+                        else:
+                            skipped_aliases.append((x11_name, c["mac_name"]))
+                            continue
+                else:
+                    skipped_aliases.append((x11_name, c["mac_name"]))
+                    continue
+            else:
+                skipped_aliases.append((x11_name, c["mac_name"]))
+                continue
         seen_identifiers.add(identifier)
 
         # Fallback a): 同 identifier 内找其他 X11 帧
@@ -321,39 +554,18 @@ def build_cape(
         fallback_used.append((src_mac, target_mac, "cross"))
         seen_identifiers.add(target_mac)
 
-    # X11 cursor 命名空间保留: 用 X11 cursor 名作为主 identifier (非 macOS 标准名)
-    # 优点: Mousecape 内部的 NSSet 会去重; cursorMap 查不到时把 X11 名作为 default name 显示,
-    # 不会显示 "Unknown"
-    # 策略: 遍历 cursor_set, 用 X11 名作为 identifier 写入 cape, 与 mac identifier 同一份 cursor dict
-    # (避免重复 PNG 数据)
-    # 跳过 32 位 hash 名 (Mousecape cursorMap 找不到 → "Unknown" type)
-    def _is_x11_hash(name: str) -> bool:
-        return len(name) == 32 and all(c in "0123456789abcdef" for c in name)
-
-    x11_used: set[str] = set()
-    x11_added_count = 0
-    for c in cursor_set:
-        x11_name = c.get("x11_name", c["mac_name"])
-        if not c.get("frames"):
-            continue
-        if x11_name in x11_used:
-            continue
-        if _is_x11_hash(x11_name):
-            continue  # 32 位 hash 名跳过, Mousecape cursorMap 找不到
-        # 找这个 X11 名对应的 mac identifier (用于复用 frames)
-        mac = c["mac_name"]
-        if mac not in cape["Cursors"]:
-            continue  # mac identifier 自身没生成 (e.g. 0 字节空文件且无 sibling), 跳过
-        x11_used.add(x11_name)
-        if x11_name == mac:
-            continue  # 已经是 mac identifier, 不重复添加
-        # 用 X11 名作为 identifier, 复用 mac identifier 的 cursor dict
-        if x11_name in cape["Cursors"]:
-            continue  # 已经有
-        cape["Cursors"][x11_name] = dict(cape["Cursors"][mac])
-        x11_added_count += 1
-    if x11_added_count:
-        print(f"  [info] kept {x11_added_count} X11 cursor name(s) as alias entry (no 'Unknown' display)")
+    if redistributed:
+        print(f"  [info] redistributed {len(redistributed)} X11 cursor(s) to spare identifiers (帧数据不同, 避免丢失):")
+        # 按目标 identifier 分组显示
+        grouped_to: dict[str, list[tuple[str, str]]] = {}
+        for x11, from_mac, to_mac in redistributed:
+            grouped_to.setdefault(to_mac, []).append((x11, from_mac))
+        for to_mac in sorted(grouped_to):
+            items = grouped_to[to_mac]
+            x11s = ', '.join(x for x, _ in items[:5])
+            more = '' if len(items) <= 5 else f' (+{len(items) - 5} more)'
+            from_macs = ', '.join(sorted(set(f for _, f in items)))
+            print(f"    {to_mac}: [{x11s}{more}]  ← from {from_macs}")
 
     if skipped_aliases:
         grouped: dict[str, list[str]] = defaultdict(list)
@@ -393,5 +605,45 @@ def build_cape(
                 f"Cape validation failed ({len(validator.errors)} error(s)). "
                 f"Mousecape will refuse to import this file."
             )
+
+    # ===== 最终摘要 =====
+    # 让用户清楚看到 cape 的实际状况: 输入 X11 cursor 数、槽位占用、合并/重定向明细
+    total_x11_in = len(cursor_set)
+    total_in_cape = len(cape["Cursors"])
+    total_redistributed = len(redistributed)
+    total_merged = len(skipped_aliases)
+    total_cross = len([f for f in fallback_used if f[2] == "cross"])
+    # 主 cursor 槽位占用 (= cape slots - 备用分配 - cross 复制)
+    main_uses_x11 = total_in_cape - total_redistributed - total_cross
+    # X11 cursor 已处理总数 = 主槽位 + 重定向 + 合并
+    x11_accounted = main_uses_x11 + total_redistributed + total_merged
+    print()
+    print(f"  ====== Summary ======")
+    print(f"  CapeName             : {cape.get('CapeName', theme_name)}")
+    print(f"  CapeFile             : {out_dir / (theme_name + '.cape')}")
+    print(f"  X11 cursor input     : {total_x11_in}")
+    print(f"  mac identifiers used : {total_in_cape} / {_ALL_MAC_CAPACITY}  (硬上限, 来自 macos_full.md)")
+    print(f"    - main (主 cursor, X11 直接映射):    {main_uses_x11}")
+    print(f"    - redistributed (重定向到备用槽位):  {total_redistributed}")
+    print(f"    - cross-fallback (复制其他 identifier): {total_cross}")
+    print()
+    print(f"  X11 cursors 处理明细:")
+    print(f"    - 用自己的帧保留到独立槽位 (鼠标实际会用这些): {main_uses_x11 + total_redistributed}")
+    print(f"    - merged (别名复用主 cursor 帧, 数据相同):     {total_merged}")
+    print()
+    print(f"  说明:")
+    print(f"    main = 主题里某个 mac identifier 的'主' X11 cursor (优先级最高)")
+    print(f"    redistributed = 帧数据不同但同 mac identifier 的其他 X11 cursor")
+    print(f"                  被分配到备用槽位 (cursor.27~38 等 Window 系列)")
+    print(f"    merged = 帧数据完全相同 (symlink alias / 真正的字节相同文件)")
+    print(f"            → 复用主 cursor 帧, 不丢失语义 (Mousecape 鼠标实际外观不变)")
+    print(f"    cross-fallback = 主题完全没提供, 复用相邻 identifier 帧 (兜底)")
+    if x11_accounted == total_x11_in:
+        print()
+        print(f"  [OK] 所有 {total_x11_in} 个 X11 cursor 都已处理 (无遗漏, 无丢失)")
+    else:
+        diff = total_x11_in - x11_accounted
+        print()
+        print(f"  [WARN] 数量不平: 输入 {total_x11_in} vs 已处理 {x11_accounted} (差 {diff})")
 
     return out

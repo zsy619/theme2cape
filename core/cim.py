@@ -24,8 +24,3 @@ class Cursor:
     name: str
     frames: List[CursorFrame]
 
-
-@dataclass
-class CursorSet:
-    theme: str
-    cursors: dict
