@@ -43,28 +43,91 @@ from pathlib import Path
 from typing import Any
 from PIL import Image
 
-
-# 复刻 MCCursor.m L11-16
-def cursor_scale_for_scale(scale: float) -> int:
-    """Mousecape 的 scale -> MCCursorScale 映射(直接 scale*100 取整)"""
-    if scale < 0.0:
-        return -1  # MCCursorScaleNone
-    return int(scale) * 100
+# 共享的 Mousecape 源码常量 (来自 MCDefs.m)
+# 兼容两种导入方式:作为 core 包内模块运行(无前缀) / 作为顶层模块运行(带 core. 前缀)
+try:
+    from mousecape_defs import (
+        MAX_FRAME_COUNT,
+        MIN_FRAME_COUNT,
+        MAX_IMPORT_SIZE,
+        MAX_HOTSPOT_VALUE,
+        MCCURSOR_SCALE_100,
+        MCCURSOR_SCALE_NONE,
+        VALID_SCALES,
+        cursor_scale_for_scale,
+        # 字典键名常量
+        MCCURSOR_DICTIONARY_MINIMUM_VERSION_KEY,
+        MCCURSOR_DICTIONARY_VERSION_KEY,
+        MCCURSOR_DICTIONARY_CURSORS_KEY,
+        MCCURSOR_DICTIONARY_AUTHOR_KEY,
+        MCCURSOR_DICTIONARY_CLOUD_KEY,
+        MCCURSOR_DICTIONARY_HIDPI_KEY,
+        MCCURSOR_DICTIONARY_IDENTIFIER_KEY,
+        MCCURSOR_DICTIONARY_CAPENAME_KEY,
+        MCCURSOR_DICTIONARY_CAPEVERSION_KEY,
+        MCCURSOR_DICTIONARY_FRAMECOUNT_KEY,
+        MCCURSOR_DICTIONARY_FRAMEDURATION_KEY,
+        MCCURSOR_DICTIONARY_HOTSPOTX_KEY,
+        MCCURSOR_DICTIONARY_HOTSPOTY_KEY,
+        MCCURSOR_DICTIONARY_POINTSWIDE_KEY,
+        MCCURSOR_DICTIONARY_POINTSHIGH_KEY,
+        MCCURSOR_DICTIONARY_REPRESENTATIONS_KEY,
+    )
+except ImportError:
+    from core.mousecape_defs import (
+        MAX_FRAME_COUNT,
+        MIN_FRAME_COUNT,
+        MAX_IMPORT_SIZE,
+        MAX_HOTSPOT_VALUE,
+        MCCURSOR_SCALE_100,
+        MCCURSOR_SCALE_NONE,
+        VALID_SCALES,
+        cursor_scale_for_scale,
+        # 字典键名常量
+        MCCURSOR_DICTIONARY_MINIMUM_VERSION_KEY,
+        MCCURSOR_DICTIONARY_VERSION_KEY,
+        MCCURSOR_DICTIONARY_CURSORS_KEY,
+        MCCURSOR_DICTIONARY_AUTHOR_KEY,
+        MCCURSOR_DICTIONARY_CLOUD_KEY,
+        MCCURSOR_DICTIONARY_HIDPI_KEY,
+        MCCURSOR_DICTIONARY_IDENTIFIER_KEY,
+        MCCURSOR_DICTIONARY_CAPENAME_KEY,
+        MCCURSOR_DICTIONARY_CAPEVERSION_KEY,
+        MCCURSOR_DICTIONARY_FRAMECOUNT_KEY,
+        MCCURSOR_DICTIONARY_FRAMEDURATION_KEY,
+        MCCURSOR_DICTIONARY_HOTSPOTX_KEY,
+        MCCURSOR_DICTIONARY_HOTSPOTY_KEY,
+        MCCURSOR_DICTIONARY_POINTSWIDE_KEY,
+        MCCURSOR_DICTIONARY_POINTSHIGH_KEY,
+        MCCURSOR_DICTIONARY_REPRESENTATIONS_KEY,
+    )
 
 
 class CapeValidator:
     """完整模拟 Mousecape v2.0 cape 文件的解析流程"""
 
-    # MCCursorLibrary.m L176-184 读取的字段
+    # MCCursorLibrary.m L176-184 读取的字段 (使用源码定义的常量)
     TOP_KEYS = (
-        "MinimumVersion", "Version", "CapeName", "CapeVersion", "Cloud",
-        "Author", "HiDPI", "Identifier", "Cursors",
+        MCCURSOR_DICTIONARY_MINIMUM_VERSION_KEY,
+        MCCURSOR_DICTIONARY_VERSION_KEY,
+        MCCURSOR_DICTIONARY_CAPENAME_KEY,
+        MCCURSOR_DICTIONARY_CAPEVERSION_KEY,
+        MCCURSOR_DICTIONARY_CLOUD_KEY,
+        MCCURSOR_DICTIONARY_AUTHOR_KEY,
+        MCCURSOR_DICTIONARY_HIDPI_KEY,
+        MCCURSOR_DICTIONARY_IDENTIFIER_KEY,
+        MCCURSOR_DICTIONARY_CURSORS_KEY,
     )
 
-    # MCCursor.m L85-92 读取的字段
+    # MCCursor.m L85-92 读取的字段 (使用源码定义的常量)
     CURSOR_KEYS = (
-        "FrameCount", "FrameDuration", "HotSpotX", "HotSpotY",
-        "PointsWide", "PointsHigh", "Representations",
+        MCCURSOR_DICTIONARY_FRAMECOUNT_KEY,
+        MCCURSOR_DICTIONARY_FRAMEDURATION_KEY,
+        MCCURSOR_DICTIONARY_HOTSPOTX_KEY,
+        MCCURSOR_DICTIONARY_HOTSPOTY_KEY,
+        MCCURSOR_DICTIONARY_POINTSWIDE_KEY,
+        MCCURSOR_DICTIONARY_POINTSHIGH_KEY,
+        MCCURSOR_DICTIONARY_REPRESENTATIONS_KEY,
     )
 
     def __init__(self, cape_path: str | Path):
@@ -110,8 +173,8 @@ class CapeValidator:
             self.errors.append("top-level dict is empty")
             return False
 
-        # identifier 必须非空(L193)
-        identifier = d.get("Identifier")
+        # identifier 必须非空(L193) - 支持新旧键名
+        identifier = d.get(MCCURSOR_DICTIONARY_IDENTIFIER_KEY) or d.get("Identifier")
         if not identifier or not isinstance(identifier, str):
             self.errors.append(
                 f"Identifier is empty or not a string: {identifier!r}"
@@ -119,8 +182,8 @@ class CapeValidator:
             return False
         self.info.append(f"Identifier = {identifier!r}")
 
-        # minimumVersion 检查(L202): 超过 parser version 则拒绝
-        min_v = d.get("MinimumVersion")
+        # minimumVersion 检查(L202): 超过 parser version 则拒绝 - 支持新旧键名
+        min_v = d.get(MCCURSOR_DICTIONARY_MINIMUM_VERSION_KEY) or d.get("MinimumVersion")
         parser_v = 2.0
         if not isinstance(min_v, (int, float)):
             self.warnings.append(
@@ -132,8 +195,8 @@ class CapeValidator:
             )
             return False
 
-        # Cursors dict
-        cursor_d = d.get("Cursors")
+        # Cursors dict - 支持新旧键名
+        cursor_d = d.get(MCCURSOR_DICTIONARY_CURSORS_KEY) or d.get("Cursors")
         if not isinstance(cursor_d, dict):
             self.errors.append(f"Cursors is not a dict: {type(cursor_d).__name__}")
             return False
@@ -153,15 +216,34 @@ class CapeValidator:
             self.errors.append(f"cursor {cid}: not a dict")
             return
 
-        # L96 必填字段检查
-        missing = [k for k in self.CURSOR_KEYS if k not in cdict]
-        if missing:
+        # 辅助函数：获取键值，支持新旧键名
+        def _get_key(orig_key, new_key):
+            return cdict.get(new_key) or cdict.get(orig_key)
+
+        # L96 必填字段检查 - 支持新旧键名
+        # 检查是否至少有一套完整的键（旧或新）
+        has_old_keys = all(k in cdict for k in (
+            "FrameCount", "FrameDuration", "HotSpotX", "HotSpotY",
+            "PointsWide", "PointsHigh", "Representations"
+        ))
+        has_new_keys = all(k in cdict for k in self.CURSOR_KEYS)
+        
+        if not has_old_keys and not has_new_keys:
+            # 尝试找出缺失的字段
+            missing = []
+            for old_key, new_key in zip(
+                ("FrameCount", "FrameDuration", "HotSpotX", "HotSpotY",
+                 "PointsWide", "PointsHigh", "Representations"),
+                self.CURSOR_KEYS
+            ):
+                if old_key not in cdict and new_key not in cdict:
+                    missing.append(f"{old_key}/{new_key}")
             self.errors.append(f"cursor {cid}: missing {missing}")
             return
 
         # L98-100 类型/值校验
-        fc = cdict["FrameCount"]
-        if not isinstance(fc, int) or fc < 1:
+        fc = _get_key("FrameCount", MCCURSOR_DICTIONARY_FRAMECOUNT_KEY)
+        if not isinstance(fc, int) or fc < MIN_FRAME_COUNT:
             self.errors.append(f"cursor {cid}: FrameCount invalid: {fc!r}")
             return
 
@@ -170,34 +252,36 @@ class CapeValidator:
         # 超过 24 帧直接拒绝 import, 整批 cursor 全部失败.
         # (Bibata-Original-Classic 的 wait/left_ptr_watch/progress 等动画 cursor
         #  file 内部 ntoc 字段被填成 2 倍, 不去重的话 FrameCount 会变 54.)
-        if fc > 24:
+        if fc > MAX_FRAME_COUNT:
             self.errors.append(
-                f"cursor {cid}: FrameCount {fc} > 24 (Mousecape apply.m L16 "
+                f"cursor {cid}: FrameCount {fc} > {MAX_FRAME_COUNT} (Mousecape apply.m L16 "
                 f"硬限制). 这通常是 xcursor file 内部有重复 frame (ntoc 写错 "
                 f"或 inline 多份), reader 需做 image content dedup."
             )
             return
 
-        fd = cdict["FrameDuration"]
+        fd = _get_key("FrameDuration", MCCURSOR_DICTIONARY_FRAMEDURATION_KEY)
         if not isinstance(fd, (int, float)) or fd <= 0:
             self.errors.append(f"cursor {cid}: FrameDuration invalid: {fd!r}")
             return
 
-        for k in ("HotSpotX", "HotSpotY"):
-            v = cdict[k]
+        # 热点坐标
+        hot_x = _get_key("HotSpotX", MCCURSOR_DICTIONARY_HOTSPOTX_KEY)
+        hot_y = _get_key("HotSpotY", MCCURSOR_DICTIONARY_HOTSPOTY_KEY)
+        for k, v in [("HotSpotX", hot_x), ("HotSpotY", hot_y)]:
             if not isinstance(v, (int, float)) or v < 0:
                 self.errors.append(f"cursor {cid}: {k} invalid: {v!r}")
                 return
 
-        for k in ("PointsWide", "PointsHigh"):
-            v = cdict[k]
+        # 尺寸
+        points_w = float(_get_key("PointsWide", MCCURSOR_DICTIONARY_POINTSWIDE_KEY))
+        points_h = float(_get_key("PointsHigh", MCCURSOR_DICTIONARY_POINTSHIGH_KEY))
+        for k, v in [("PointsWide", points_w), ("PointsHigh", points_h)]:
             if not isinstance(v, (int, float)) or v <= 0:
                 self.errors.append(f"cursor {cid}: {k} invalid: {v!r}")
                 return
 
-        points_w = float(cdict["PointsWide"])
-        points_h = float(cdict["PointsHigh"])
-        reps = cdict["Representations"]
+        reps = _get_key("Representations", MCCURSOR_DICTIONARY_REPRESENTATIONS_KEY)
         if not isinstance(reps, list) or not reps:
             self.errors.append(f"cursor {cid}: Representations empty or not list")
             return
@@ -231,9 +315,9 @@ class CapeValidator:
                 continue
             scale = pix_w / points_w
             mcc_scale = cursor_scale_for_scale(scale)
-            if mcc_scale < 0:
+            if mcc_scale == MCCURSOR_SCALE_NONE:
                 self.errors.append(
-                    f"cursor {cid}: rep[{i}] scale {scale} < 0 (MCCursorScaleNone)"
+                    f"cursor {cid}: rep[{i}] scale {scale} < 0 (MCCURSOR_SCALE_NONE)"
                 )
                 continue
             scales_seen.add(mcc_scale)
@@ -276,10 +360,10 @@ class CapeValidator:
                     f"PointsWide({points_w}) = {pix_w / points_w:.3f} (not integer)"
                 )
 
-        # 必须有 @1x (MCCursorScale100)
-        if 100 not in scales_seen:
+        # 必须有 @1x (MCCURSOR_SCALE_100)
+        if MCCURSOR_SCALE_100 not in scales_seen:
             self.warnings.append(
-                f"cursor {cid}: no @1x (scale=100) rep; scales seen: {sorted(scales_seen)}"
+                f"cursor {cid}: no @1x (scale={MCCURSOR_SCALE_100}) rep; scales seen: {sorted(scales_seen)}"
             )
 
         # FrameDuration 警告: 静态光标 (FrameCount=1) FrameDuration 不应有意义

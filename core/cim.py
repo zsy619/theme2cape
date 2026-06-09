@@ -23,4 +23,8 @@ class CursorFrame:
 class Cursor:
     name: str
     frames: List[CursorFrame]
+    # 真实磁盘路径(由 kxcursor_reader.read_xcursor 写入), 用于 normalizer
+    # 在 MACOS_CURSOR_MAP 找不到时通过 os.path.realpath() 解析 symlink
+    # 把 X11 1.20+ 32 位 hex 哈希名映射到标准 cursor 名
+    path: str = ""
 

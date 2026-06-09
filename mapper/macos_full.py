@@ -6,7 +6,11 @@
 # 找到对应替换光标。
 #
 # 完整 identifier ↔ 名称对照表见 Mousecape 源码 MCDefs.m 的 cursorMap():
-#   https://github.com/alexzielenski/Mousecape/blob/master/Mousecape/mousecloak/MCDefs.m
+#   https://github.com/sdmj76-team/Mousecape-swiftUI/blob/main/Mousecape/mousecloak/MCDefs.m
+#
+# 单一真相源: 任何映射目标都必须来自源码 cursorNameMap (50 个 identifier)
+from core.mousecape_defs import CURSOR_MAP as _CURSOR_MAP_FOR_ASSERT
+
 MACOS_CURSOR_MAP = {
     # ===== BASIC POINTER =====
     "arrow": "com.apple.coregraphics.Arrow",
@@ -27,7 +31,6 @@ MACOS_CURSOR_MAP = {
     "hand": "com.apple.cursor.13",
     "pointing_hand": "com.apple.cursor.13",
     "link": "com.apple.cursor.2",  # Link
-    "e29285e634086352946a0e7090d73106": "com.apple.cursor.13",  # X11 编码名 -> hand2
     # ===== COPY / DRAG =====
     "copy": "com.apple.coregraphics.Copy",
     "dnd-copy": "com.apple.cursor.5",  # Copy Drag
@@ -157,28 +160,82 @@ MACOS_CURSOR_MAP = {
     "left_ptr_help": "com.apple.cursor.40",  # 箭头+问号 -> help
     # ===== POOF / SPINNING =====
     "poof": "com.apple.cursor.25",
-    # ===== 32位哈希名(X11 cursor encoding) -> 对应 macOS identifier =====
-    # Vimix 主题里有大量 32 位哈希名, 这是 X11 在 1.20+ 引入的 alias 机制
-    # 实际指向已通过真实文件 / symlink 表建立, 我们直接用常用编码 → 标准名映射
-    "00000000000000020006000e7e9ffc3f": "com.apple.cursor.15",  # progress
-    "00008160000006810000408080010102": "com.apple.cursor.23",  # size_ver
-    "03b6e0fcb3499374a867c041f52298f0": "com.apple.cursor.3",  # circle
-    "08e8e1c95fe2fc01f976f1e063a24ccd": "com.apple.cursor.15",  # progress
-    "1081e37283d90000800003c07f3ef6bf": "com.apple.cursor.2",  # copy drag variant
-    "3085a0e285430894940527032f8b26df": "com.apple.coregraphics.Alias",
-    "3ecb610c1bf2410f44200f48c40d3599": "com.apple.cursor.15",  # progress
-    "4498f0e0c1937ffe01fd06f973665830": "com.apple.cursor.11",  # dnd-move
-    "5c6cd98b3f3ebcb1f9c7f1c204630408": "com.apple.cursor.40",  # help
-    "6407b0e94181790501fd1e167b474872": "com.apple.cursor.2",  # copy drag
-    "640fb0e74195791501fd1ed57b41487f": "com.apple.coregraphics.Alias",
-    "9081237383d90e509aa00f00170e968f": "com.apple.cursor.11",  # dnd-move
-    "9d800788f1b08800ae810202380a0822": "com.apple.cursor.13",  # pointer
-    "a2a266d0498c3104214a47bd64ab0fc8": "com.apple.coregraphics.Alias",
-    "b66166c04f8c3109214a4fbd64a50fc8": "com.apple.cursor.2",  # copy drag
-    "d9ce0ab605698f320427677b458ad60b": "com.apple.cursor.40",  # help
-    "fcf21c00b30f7e3f83fe0dfd12e71cff": "com.apple.cursor.11",  # dnd-move
     # ===== 跳过(系统默认/X11 内部光标,无对应 macOS identifier)=====
-    "X_cursor": None,
+    "X_cursor": "com.apple.cursor.7",  # X 形光标 -> Crosshair
     "wayland-cursor": None,
     "x-cursor": None,
+    # ===== Comix / BibataExtra / Layan 等主题补全 =====
+    # 源: out/_extracted_*/<theme>/cursors/decoded 目录扫描结果
+    # 这些 cursor 名称是 X11 主题中常见的别名, 没在 MACOS_CURSOR_MAP 上半部分覆盖
+    # 全部映射目标都是源码 cursorNameMap (50 个) 内的 identifier
+    # ----- 通用别名 (≥12 个主题) -----
+    "double_arrow": "com.apple.cursor.19",  # 双向箭头 (默认到水平) = sb_h_double_arrow
+    "draft_large": "com.apple.cursor.7",  # 大十字草稿 = crosshair
+    "draft_small": "com.apple.cursor.7",  # 小十字草稿 = crosshair
+    "up_arrow": "com.apple.cursor.21",  # 上箭头 = sb_up_arrow
+    "center-main": "com.apple.cursor.7",  # 中心十字 (CSS) = center_ptr
+    "clock": "com.apple.coregraphics.Wait",  # 时钟 = wait (Busy 状态)
+    "dot": "com.apple.cursor.41",  # 点框 = dotbox (Cell)
+    "dragging": "com.apple.cursor.11",  # 拖拽中 = grabbing
+    "horizontal-text": "com.apple.coregraphics.IBeam",  # 水平文本 = IBeam
+    "kill": "com.apple.cursor.3",  # 禁止 = forbidden
+    "left-main": "com.apple.coregraphics.Arrow",  # 左侧主箭头 = arrow
+    "pointer2": "com.apple.cursor.13",  # 指针 2 = hand2
+    "right-main": "com.apple.coregraphics.Arrow",  # 右侧主箭头 = arrow
+    "top_right_arrow": "com.apple.cursor.30",  # 右上箭头 = ne-resize
+    "zoom_in": "com.apple.cursor.42",  # 放大 (无下划线版) = zoom-in
+    "zoom_out": "com.apple.cursor.43",  # 缩小 (无下划线版) = zoom-out
+    # ----- 8-11 主题 (中频次) -----
+    "size-hor": "com.apple.cursor.19",  # 水平调整 (CSS) = ew-resize
+    "size-ver": "com.apple.cursor.23",  # 垂直调整 (CSS) = ns-resize
+    "center_main": "com.apple.cursor.7",  # 中心十字别名 = crosshair
+    "hor-resize": "com.apple.cursor.19",  # 水平调整 = ew-resize
+    "ver-resize": "com.apple.cursor.23",  # 垂直调整 = ns-resize
+    "scan": "com.apple.cursor.23",  # 扫描 (X11 sb_v_double_arrow 别名) = sb_v_double_arrow
+    # ----- 1-2 主题 (低频次) -----
+    "base_arrow_down": "com.apple.cursor.22",  # 基本下箭头 (X11 base) = sb_down_arrow
+    "base_arrow_up": "com.apple.cursor.21",  # 基本上箭头 (X11 base) = sb_up_arrow
+    "based_arrow_down": "com.apple.cursor.22",  # X11 base 双下划线别名
+    "based_arrow_up": "com.apple.cursor.21",  # X11 base 双下划线别名
+    "centre_ptr": "com.apple.cursor.7",  # 中心指针 (英式拼写) = center_ptr
+    "left_ptr_move": "com.apple.cursor.11",  # 左指针移动 (罕见) = grabbing
+    "sizenesw_down": "com.apple.cursor.30",  # NE-SW 调整 = ne-resize
+    "x_cursor": "com.apple.cursor.7",  # X 形光标 (小写) = X_cursor -> Crosshair
+    "X-cursor": "com.apple.cursor.7",  # X 形光标 (大写连字符) = X_cursor -> Crosshair
+    # ----- X11 1.20+ 32 位哈希别名已全部移除 -----
+    # 原因: 32 位 hex 哈希名不稳定, 同一视觉 cursor 在不同主题包里哈希值不同
+    # 且 X11 alias 机制 (X11 1.20+ 引入了 `XcursorFileHash` 算法) 在绝大多数
+    # 现代 X11 主题里这些哈希名实际是 symlink 指向标准 cursor, 会被
+    # normalizer 通过真实文件读取并解析到对应标准名. **不应** 在 MACOS_CURSOR_MAP
+    # 中硬编码哈希名. 以后没有特别说明也不允许出现任何哈希名映射.
 }
+
+
+# ===== 启动时自检: 确保所有 cursor 名称的映射目标都在源码 cursorNameMap 内 =====
+# 任何遗漏或漂移都会导致 X11 cursor 数据被丢弃, 生成的 cape 残缺
+_MISSING_TARGETS = {
+    src: tgt
+    for src, tgt in MACOS_CURSOR_MAP.items()
+    if tgt is not None and tgt not in _CURSOR_MAP_FOR_ASSERT
+}
+assert not _MISSING_TARGETS, (
+    f"MACOS_CURSOR_MAP 中 {len(_MISSING_TARGETS)} 个映射目标不在源码 cursorNameMap 中:\n"
+    + "\n".join(f"  {src} -> {tgt}" for src, tgt in _MISSING_TARGETS.items())
+)
+
+# ===== 启动时自检: 禁止任何 X11 1.20+ 32 位 hex 哈希名映射 =====
+# 32 位 hex 哈希名不稳定, 同一视觉 cursor 在不同主题包里哈希值不同, 不应硬编码.
+# 这些哈希名 cursor 在 X11 主题包内是 symlink 指向标准 cursor, 应由 normalizer
+# 通过解析真实文件/symlink 来找到对应标准名, 而不是在 MACOS_CURSOR_MAP 中硬编码.
+import re
+
+_HASH_PATTERN = re.compile(
+    r"^[0-9a-f]{16,32}$" r"|^[0-9a-f]{8}_[0-9a-f]{8}_[0-9a-f]{8}_[0-9a-f]{8}$"
+)
+_HASH_KEYS = [k for k in MACOS_CURSOR_MAP if _HASH_PATTERN.match(k)]
+assert not _HASH_KEYS, (
+    f"MACOS_CURSOR_MAP 中存在 {len(_HASH_KEYS)} 个 32 位 hex 哈希名映射 (用户明确要求移除):\n"
+    + "\n".join(f"  {k} -> {MACOS_CURSOR_MAP[k]}" for k in _HASH_KEYS)
+    + "\n\n提示: 哈希 cursor 在 X11 主题包内是 symlink, 应由 normalizer 解析标准名, "
+    "而不是在 MACOS_CURSOR_MAP 中硬编码."
+)

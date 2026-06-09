@@ -201,7 +201,7 @@ def read_xcursor(file: Path) -> Cursor:
             )
         )
 
-    return Cursor(file.stem, frames)
+    return Cursor(file.stem, frames, path=str(file))
 
 
 def _is_archive(path: Path) -> bool:

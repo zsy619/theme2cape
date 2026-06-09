@@ -1,0 +1,110 @@
+name: CursorMap Sync Check
+
+# CI 流程: 每次 PR/Push 时自动验证 cape 文件与 Mousecape 源码 cursorNameMap 严格一致
+# 失败时阻止合并, 防止引入与源码漂移的修改
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:  # 允许手动触发
+
+jobs:
+  sync-check:
+    name: cursorNameMap 一致性 + cape 完整性检查
+    runs-on: macos-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: 设置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 安装依赖
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install pillow numpy
+
+      - name: Step 1: 启动 assert 校验 (3 层)
+        run: |
+          echo "===== mousecape_defs self_check ====="
+          python3 -m core.mousecape_defs
+          echo "===== macos_full 启动 assert ====="
+          python3 -c "from mapper.macos_full import MACOS_CURSOR_MAP; print(f'OK: {len(MACOS_CURSOR_MAP)} mappings, 0 哈希名')"
+          echo "===== normalizer 启动 assert ====="
+          python3 -c "from core.normalizer import normalize; print('OK: normalizer loaded')"
+
+      - name: Step 2: 26 主题 cursor 名称扫描
+        run: |
+          # 必须有 _extracted_* 主题目录 (从 batch.py 解压生成)
+          # CI 模式下, 用 themes/ 下的所有压缩包生成测试
+          python3 -c "
+          import tarfile, zipfile
+          from pathlib import Path
+          for theme in Path('themes').glob('*'):
+              if theme.suffix in ('.tar', '.tgz') or theme.name.endswith(('.tar.gz', '.tar.xz', '.zip')):
+                  ext_dir = Path('out/_extracted_' + theme.stem)
+                  if ext_dir.exists():
+                      continue
+                  ext_dir.mkdir(parents=True, exist_ok=True)
+                  try:
+                      if zipfile.is_zipfile(theme):
+                          with zipfile.ZipFile(theme) as zf:
+                              zf.extractall(ext_dir)
+                      else:
+                          with tarfile.open(theme) as tf:
+                              tf.extractall(ext_dir)
+                  except Exception as e:
+                      print(f'⚠️  Failed to extract {theme}: {e}')
+          "
+          python3 _scan_cursors_v2.py
+
+      - name: Step 3: 静态引用一致性检查
+        run: python3 _check_identifier_consistency.py
+
+      - name: Step 4: 全量生成 cape 文件
+        run: |
+          # 清理旧的 cape
+          find out/ -maxdepth 1 -name "*.cape" -delete 2>/dev/null || true
+          # 生成所有主题
+          for theme in themes/*.tar themes/*.tar.gz themes/*.tar.xz themes/*.tgz themes/*.zip; do
+              [ -f "$theme" ] || continue
+              python3 cli.py "$theme" || echo "⚠️  Failed: $theme"
+          done
+
+      - name: Step 5: 18/18 Pointer 完整性验证
+        run: |
+          python3 check_pointers.py
+          if [ $? -ne 0 ]; then
+              echo "❌ Pointer 检查失败"
+              exit 1
+          fi
+
+      - name: Step 6: cape 文件级审计
+        run: python3 _audit_cape_identifiers.py
+
+      - name: Step 7: Mousecape 加载模拟
+        run: python3 validate_capes.py
+
+      - name: 上传 cape 文件作为 artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cape-files
+          path: out/*.cape
+          retention-days: 7
+
+      - name: 最终汇总
+        if: always()
+        run: |
+          echo "===== 最终汇总 ====="
+          ls -la out/*.cape 2>/dev/null | wc -l
+          echo "个 cape 文件"
+          echo ""
+          echo "如果看到上述数字 = 0, 说明 Step 4 生成失败"
+          echo "如果 > 0, 说明 cape 文件已生成"
