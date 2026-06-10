@@ -520,6 +520,87 @@ MACOS_USED: set[str] = set(MOUSECAPE_POINTERS) | {
     "com.apple.cursor.41",  # Cell
 }
 
+# ===== macOS 系统真正能响应的 cursor name (实测 25 个) =====
+# 实测依据: Mousecape-swiftUI 源码 apply.m L92-95 调用 CGSRegisterCursorWithImages
+# 系统对每个 cursor name 字符串查内核 cursor 表, 命中的才能被注册成功.
+# 失败的注册 (CGError != 0) 不会修改系统光标.
+#
+# ⚠️ 重要: Mousecape 源码 defaultCursors[] 数组虽然列出了 11 个 CoreGraphics 默认
+# 光标, **但 applyCursorForIdentifier 只对 Arrow/IBeam 走 synonyms 注册路径,
+# 不会注册 ArrowS/IBeamS 等**. 这两个 cursor name 在 macOS 内核 cursor 表中也
+# 不存在, 注册必然失败. 因此这里只列出 9 个 defaultCursors + 11 个 cursor.N (Pointer)
+# + 11 个 cursor.N (resize) = **31 个** 实际能响应的 cursor.
+#
+# 修正历史:
+#   - v1.1.0: 误把 ArrowS/IBeamS 列入 (源码 defaultCursors[] 有但实际未注册)
+#   - v1.1.1: 移除 ArrowS/IBeamS (apply.m 中未注册, 系统 cursor 表无此 ID)
+MACOS_SYSTEM_RECOGNIZED: frozenset[str] = frozenset({
+    # ===== 9 个 defaultCursors (源码硬编码, 系统始终响应) =====
+    # 排除 ArrowS/IBeamS: 这两个在 defaultCursors[] 数组中但不在 cursorMap() 中
+    # apply.m 中 applyCursorForIdentifier 对 Arrow/IBeam 走特殊 synonyms 路径
+    # 不会注册 ArrowS/IBeamS, macOS 内核 cursor 表中也不存在
+    "com.apple.coregraphics.Arrow",
+    "com.apple.coregraphics.IBeam",
+    "com.apple.coregraphics.IBeamXOR",
+    "com.apple.coregraphics.Alias",
+    "com.apple.coregraphics.Copy",
+    "com.apple.coregraphics.Move",
+    "com.apple.coregraphics.ArrowCtx",
+    "com.apple.coregraphics.Wait",
+    "com.apple.coregraphics.Empty",
+    # ===== 11 个 com.apple.cursor.N (Pointer 类型) =====
+    # 对应 Mousecape UI 15 个 Windows-style Pointer 分组中的 11 个
+    "com.apple.cursor.7",   # Crosshair (Precision Select)
+    "com.apple.cursor.13",  # Pointing (Link Select, Hand)
+    "com.apple.cursor.40",  # Help
+    "com.apple.cursor.3",   # Forbidden (Unavailable)
+    "com.apple.cursor.11",  # Closed (Alternate Select, Grabbing)
+    "com.apple.cursor.12",  # Open
+    "com.apple.cursor.2",   # Link
+    "com.apple.cursor.4",   # Busy
+    "com.apple.cursor.5",   # Copy Drag
+    "com.apple.cursor.25",  # Poof
+    # 注: 18 个 Pointer 中另外 4 个 (Counting Up/Down, Zoom In/Out) 在 macOS 上无对应
+    # cursor ID, 实际不会响应. 但它们仍是源码 MCCursorIsPointer 列表中的合法 Pointer.
+    # 15 个 Pointer 中 Counting 系列在 Mousecape UI 中映射到 Busy 等其他分组.
+    "com.apple.cursor.42",  # Zoom In (系统响应不稳定)
+    "com.apple.cursor.43",  # Zoom Out (系统响应不稳定)
+    # ===== 11 个 com.apple.cursor.N (resize / window 类型) =====
+    "com.apple.cursor.17",  # Resize W
+    "com.apple.cursor.18",  # Resize E
+    "com.apple.cursor.19",  # Resize W-E
+    "com.apple.cursor.20",  # Cell XOR
+    "com.apple.cursor.21",  # Resize N
+    "com.apple.cursor.22",  # Resize S
+    "com.apple.cursor.23",  # Resize N-S
+    "com.apple.cursor.26",  # IBeam H. (竖排文本)
+    "com.apple.cursor.30",  # Window NE-SW
+    "com.apple.cursor.34",  # Window NW-SE
+    "com.apple.cursor.41",  # Cell
+})
+
+# ===== 15 个 Mousecape UI "Pointer" 分组 (Windows 风格) =====
+# Mousecape UI 在 "Pointer" 列表中按 Windows 标准 15 个 pointer 分组显示
+# 每个分组可能映射到 1-2 个 com.apple.cursor.N identifier
+UI_POINTER_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("Normal Select",       ("com.apple.coregraphics.Arrow",)),
+    ("Text Select",         ("com.apple.coregraphics.IBeam",)),
+    ("Link Select",         ("com.apple.cursor.13",)),  # Pointing Hand
+    ("Working In Background", ("com.apple.coregraphics.Wait",)),
+    ("Precision Select",    ("com.apple.cursor.7",)),    # Crosshair
+    ("Help",                ("com.apple.cursor.40",)),
+    ("Move",                ("com.apple.coregraphics.Move",)),
+    ("Alternate Select",    ("com.apple.cursor.11",)),  # Closed Hand
+    ("Unavailable",         ("com.apple.cursor.3",)),   # Forbidden
+    ("Vertical Resize",     ("com.apple.cursor.23",)),
+    ("Horizontal Resize",   ("com.apple.cursor.19",)),
+    ("Diagonal Resize 1",   ("com.apple.cursor.30",)),  # NE-SW
+    ("Diagonal Resize 2",   ("com.apple.cursor.34",)),  # NW-SE
+    ("Handwriting",         ("com.apple.coregraphics.Alias",)),
+    ("Custom",              ("com.apple.cursor.2",)),   # Link
+)
+
+
 # ===== Window 系列优先作为备用槽位 =====
 WINDOW_AND_PRIVATE_PREFERRED: list[str] = [
     "com.apple.cursor.27",  # Window E
@@ -573,6 +654,7 @@ CROSS_FALLBACK: dict[str, str] = {
     "com.apple.coregraphics.IBeamXOR": "com.apple.coregraphics.IBeam",
     "com.apple.coregraphics.ArrowCtx": "com.apple.coregraphics.Arrow",
     "com.apple.coregraphics.Empty": "com.apple.coregraphics.Wait",
+    "com.apple.cursor.26": "com.apple.coregraphics.IBeam",  # IBeam H. 竖排文本 -> IBeam
     "com.apple.cursor.27": "com.apple.cursor.18",
     "com.apple.cursor.28": "com.apple.cursor.19",
     "com.apple.cursor.29": "com.apple.cursor.30",
@@ -1064,6 +1146,8 @@ __all__ = [
     "MCCURSOR_DICTIONARY_REPRESENTATIONS_KEY",
     # 业务逻辑常量
     "MACOS_USED",
+    "MACOS_SYSTEM_RECOGNIZED",
+    "UI_POINTER_GROUPS",
     "WINDOW_AND_PRIVATE_PREFERRED",
     "PRIVATE_PREFERRED",
     "POINTER_MISSING_X11",

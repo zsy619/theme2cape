@@ -24,6 +24,7 @@ from PIL import Image
 from core.mousecape_defs import (
     CROSS_FALLBACK,
     CURSOR_MAP,
+    MACOS_SYSTEM_RECOGNIZED,
     MACOS_USED,
     MOUSECAPE_POINTERS,
     MOUSECAPE_POINTERS_LIST,
@@ -68,30 +69,53 @@ _STANDARD_SCALES: tuple[float, ...] = (1.0, 2.0, 5.0)
 _DEFAULT_TARGET_SIZE = 48
 
 
-def _select_base_size(frames, target: int = _DEFAULT_TARGET_SIZE) -> tuple[int, int]:
+def _select_base_size(frames, target: int = 48) -> tuple[int, int]:
     """
-    选 @1x 逻辑点尺寸。
+    选 base size (PointsWide/High) 用作 cape 顶层元数据.
 
-    策略:
-      1. 优先精确匹配 target
-      2. 否则用最大的不超过 target 的尺寸
-      3. 最后用最小可用尺寸
+    选桶策略 (与 _frame_count 保持完全一致):
+      1. 优先精确匹配 target (≤48 时选 36 或 48 等"标准" 尺寸)
+      2. 否则选**帧数最多**的 size 桶 (动画最完整)
+      3. 帧数相同时选 size 最大的桶 (细节最丰富)
+      4. 静态光标 (全 1 帧) 时回到原 target 策略
     """
     sizes = sorted({(f.width, f.height) for f in frames})
     if not sizes:
         return target, target
+
+    # 计算每个 size 桶的帧数
+    by_size: dict[tuple[int, int], int] = defaultdict(int)
+    for f in frames:
+        by_size[(f.width, f.height)] += 1
+
+    # 1. 优先 target 精确匹配
     if (target, target) in sizes:
         return target, target
-    below = [s for s in sizes if s[0] <= target and s[1] <= target]
-    if below:
-        return below[-1]
-    return sizes[0]
+
+    # 2. 选帧数最多 + size 最大的桶 (与 _frame_count 一致)
+    #    这样保证 FrameCount 与 sheet 高度匹配
+    best_size = max(
+        by_size.keys(),
+        key=lambda s: (by_size[s], s[0] * s[1]),
+    )
+
+    # 3. 若主导桶帧数为 1 (静态), 仍按 target 策略选
+    #    (因为没有动画, 不需要"完整动画周期")
+    if by_size[best_size] == 1:
+        below = [s for s in sizes if s[0] <= target and s[1] <= target]
+        if below:
+            return below[-1]
+        return sizes[-1]  # 取最大 size
+    return best_size
 
 
 def _build_representations(frames, points_w: int, points_h: int) -> list[bytes]:
     """
     把每个 size 下的多帧垂直堆叠成一张大图，为每个 scale 选择合适的 size，
     编码成 PNG 字节。
+
+    选桶策略: caller (build_cape) 通过 _select_base_size 选好 base size,
+    传入 points_w/h, 这里直接用它来选桶. 这保证 FrameCount 与 sheet 高度匹配.
     """
     by_size: dict[tuple[int, int], list] = defaultdict(list)
     for f in frames:
@@ -151,11 +175,28 @@ def _build_representations(frames, points_w: int, points_h: int) -> list[bytes]:
 
 
 def _frame_count(frames) -> int:
-    """动画帧数 = 任何 size 桶里最多的条目数 (静态光标每桶 1 帧)"""
+    """
+    动画帧数 = 主导 size 桶里的条目数 (静态光标返回 1).
+
+    重要: 必须与 _build_representations 实际选用的 size 桶保持一致,
+    否则 validator 会报 "rep height != PointsHigh * scale * FrameCount".
+
+    选桶策略:
+      1. 优先选帧数最多的桶 (动画最完整)
+      2. 若帧数相同, 选 size 最大的桶 (动画细节最丰富)
+      3. 若全为 1 帧, 选 size 最大的桶 (高分辨率, 静态)
+    """
     by_size: dict[tuple[int, int], int] = defaultdict(int)
     for f in frames:
         by_size[(f.width, f.height)] += 1
-    return max(by_size.values()) if by_size else 1
+    if not by_size:
+        return 1
+    # 选帧数最多 + size 最大的桶
+    best_size, best_count = max(
+        by_size.items(),
+        key=lambda kv: (kv[1], kv[0][0] * kv[0][1]),
+    )
+    return best_count
 
 
 def _frame_duration_seconds(frames) -> float:
@@ -553,41 +594,106 @@ def build_cape(
             f"  [WARN] 数量不平: 输入 {total_x11_in} vs 已处理 {x11_accounted} (差 {diff})"
         )
 
-    # 18 个 Pointer 槽位对应状态
+    # ===== 三层分类报告 =====
+    # Cape 文件 cursor 状态 (50 槽位视图): 让用户看到每个槽位是否被填充
+    # macOS 系统响应视图 (25 个): 系统实际能注册成功的 cursor
+    # Mousecape UI Pointer 视图 (15 个 Windows 风格): UI 主界面显示的分组
+
     print()
-    print(f"  ====== 18 个 Mousecape Pointer 槽位 ======")
+    print(f"  ====== 三层分类汇总 ======")
+    print(f"  层级 1: cape 文件 50 个 cursorMap 槽位 (cursorMap 全集)")
+    print(f"  层级 2: macOS 系统能响应的 {len(MACOS_SYSTEM_RECOGNIZED)} 个 cursor (实测)")
+    print(f"  层级 3: Mousecape UI 15 个 Pointer 分组 (Windows 风格)")
+    print()
+
     cross_fallback_targets = {
         target for src, target, kind in fallback_used if kind == "cross"
     }
-    pointer_x11_candidates: dict[str, list[str]] = {p: [] for p in MOUSECAPE_POINTERS}
+
+    # 收集 X11 候选
+    pointer_x11_candidates: dict[str, list[str]] = {p: [] for p in VALID_CURSOR_IDENTIFIERS}
     for c in cursor_set:
         x11 = c.get("x11_name", c["mac_name"])
         mac = c["mac_name"]
         if mac in pointer_x11_candidates:
             pointer_x11_candidates[mac].append(x11)
 
-    ptr_mapped = 0
-    ptr_cross = 0
-    for pid, pname in zip(MOUSECAPE_POINTERS_LIST, POINTER_DISPLAY_NAMES):
-        if pid in cross_fallback_targets:
-            src = CROSS_FALLBACK.get(pid, "?")
-            src_name = get_cursor_name(src)
-            print(f"    ⚠️ {pname:<18s} {pid:<48s} cross-fallback ← {src} ({src_name})")
-            ptr_cross += 1
-        elif pid in cursors_dict:
-            cands = pointer_x11_candidates.get(pid, [])
-            cand_str = f" ← X11 候选: {', '.join(cands[:3])}" if cands else ""
-            more = f" (+{len(cands) - 3} more)" if len(cands) > 3 else ""
-            print(f"    ✅ {pname:<18s} {pid:<48s} X11 主题对应{cand_str}{more}")
-            ptr_mapped += 1
-        else:
-            print(f"    ❌ {pname:<18s} {pid:<48s} 缺失")
-
-    print()
+    # 统计三层的填充情况
+    # 层级 1: 50 槽位
+    total_50 = len(VALID_CURSOR_IDENTIFIERS)
+    filled_50 = sum(1 for p in VALID_CURSOR_IDENTIFIERS if p in cursors_dict)
     print(
-        f"  Pointer 汇总: ✅ {ptr_mapped} 个 X11 对应, ⚠️ {ptr_cross} 个 cross-fallback"
+        f"  [1] cape 文件 50 槽位: ✅ {filled_50}/{total_50} 填充 "
+        f"({total_50 - filled_50} 缺失)"
     )
-    if ptr_mapped + ptr_cross == 18:
-        print(f"  [OK] 18 个 Mousecape Pointer 全部填充")
+
+    # 层级 2: 25 个 macOS 系统响应
+    total_25 = len(MACOS_SYSTEM_RECOGNIZED)
+    filled_25 = sum(
+        1 for p in MACOS_SYSTEM_RECOGNIZED if p in cursors_dict
+    )
+    print(
+        f"  [2] macOS 系统响应 {total_25} 个: ✅ {filled_25}/{total_25} 填充 "
+        f"({total_25 - filled_25} 缺失)"
+    )
+
+    # 层级 3: 15 个 UI Pointer 分组（每个分组只要任一 identifier 填充就视为已填充）
+    from core.mousecape_defs import UI_POINTER_GROUPS
+    total_15 = len(UI_POINTER_GROUPS)
+    filled_15 = sum(
+        1
+        for _, idents in UI_POINTER_GROUPS
+        if any(p in cursors_dict for p in idents)
+    )
+    print(
+        f"  [3] Mousecape UI 15 Pointer 分组: ✅ {filled_15}/{total_15} 填充 "
+        f"({total_15 - filled_15} 分组空缺)"
+    )
+
+    # 详细列出每层的缺失项
+    print()
+    missing_50 = [p for p in VALID_CURSOR_IDENTIFIERS if p not in cursors_dict]
+    if missing_50:
+        print(f"  [1] 50 槽位缺失 ({len(missing_50)} 个):")
+        for p in missing_50:
+            print(f"      ❌ {p} ({get_cursor_name(p)})")
+
+    missing_25 = [p for p in MACOS_SYSTEM_RECOGNIZED if p not in cursors_dict]
+    if missing_25:
+        print(f"  [2] macOS 系统响应缺失 ({len(missing_25)} 个):")
+        for p in missing_25:
+            # 用 CURSOR_MAP 反查名称, 没有的用描述性占位符
+            name = get_cursor_name(p)
+            if name == "Unknown":
+                # 列出在 CURSOR_MAP 中没注册但源码 defaultCursors[] 中有的 cursor
+                # 这些 cursor 实际系统不响应, 不应该出现在本层级
+                print(f"      ⚠️ {p} (不在 CURSOR_MAP, 默认跳过)")
+            else:
+                print(f"      ❌ {p} ({name})")
+
+    missing_15 = [
+        (gname, idents)
+        for gname, idents in UI_POINTER_GROUPS
+        if not any(p in cursors_dict for p in idents)
+    ]
+    if missing_15:
+        print(f"  [3] 15 UI 分组空缺 ({len(missing_15)} 个):")
+        for gname, idents in missing_15:
+            print(f"      ❌ {gname} <- {[get_cursor_name(p) for p in idents]}")
+
+    # 关键成功标准
+    print()
+    if filled_50 == 50:
+        print(f"  [OK] cape 文件 {total_50} 个 cursorMap 槽位全部填充!")
+    else:
+        print(f"  [WARN] cape 文件缺 {total_50 - filled_50} 个槽位 (期望 50)")
+
+    if filled_25 == total_25:
+        print(f"  [OK] macOS 系统响应的 {total_25} 个 cursor 全部填充!")
+    else:
+        print(f"  [WARN] macOS 系统响应缺 {total_25 - filled_25} 个")
+
+    if filled_15 == 15:
+        print(f"  [OK] Mousecape UI 15 个 Pointer 分组全部填充!")
 
     return out

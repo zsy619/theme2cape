@@ -335,8 +335,37 @@ def discover_themes(theme_path: Path, out_root: Path = None, merge_similar: bool
             with zipfile.ZipFile(theme_path) as zf:
                 zf.extractall(extracted_root)
         else:
-            with tarfile.open(theme_path) as tf:
-                tf.extractall(extracted_root)
+            # Python 3.14+ tarfile 默认 data filter 会拒绝:
+            #   1) symlink 指向绝对路径 (AbsoluteLinkError)
+            #   2) symlink 跳出目标目录 (LinkOutsideDestinationError)
+            #   3) symlink 自身形成循环 (Too many levels of symbolic links)
+            # 但 XCursor 主题里经常出现 (例如 silver-arrow-cursor 的 x_cursor
+            # 自循环, Skyrim 主题的 sb_down_arrow 绝对路径 symlink).
+            # 用 'fully_trusted' filter 接受所有, 与旧版 Python 行为一致.
+            #
+            # 进一步, 解压过程中**逐个 member** 提取并 try/except, 跳过问题
+            # symlink (例如自循环 x_cursor 会被 OS 拒绝, 必须跳过).
+            try:
+                with tarfile.open(theme_path) as tf:
+                    try:
+                        # 新版 Python 支持 filter 参数
+                        skip_count = 0
+                        for member in tf.getmembers():
+                            try:
+                                tf.extract(member, extracted_root, filter="fully_trusted")
+                            except (OSError, tarfile.TarError) as e:
+                                # 跳过问题 symlink (自循环, 绝对路径, 路径逃逸等)
+                                skip_count += 1
+                        if skip_count:
+                            print(
+                                f"  [info] skipped {skip_count} problematic symlink(s) in archive"
+                            )
+                    except TypeError:
+                        # 旧版 Python 不支持 filter 参数
+                        tf.extractall(extracted_root)
+            except Exception:
+                # 最终回退: 让原始异常抛出 (保留可诊断性)
+                raise
     elif theme_path.is_dir():
         extracted_root = theme_path
     else:
