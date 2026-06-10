@@ -12,6 +12,7 @@ SUPPORTED = (
     ".tar",
     ".tar.bz2",
     ".tbz2",
+    ".7z",
 )
 
 total = 0

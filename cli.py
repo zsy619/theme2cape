@@ -6,7 +6,7 @@ from core.cape_builder import build_cape
 
 
 # 按优先级尝试剥掉这些压缩包后缀
-_ARCHIVE_EXTS = (".tar.xz", ".tar.gz", ".tgz", ".zip", ".tar", ".tar.bz2", ".tbz2")
+_ARCHIVE_EXTS = (".tar.xz", ".tar.gz", ".tgz", ".zip", ".tar", ".tar.bz2", ".tbz2", ".7z")
 
 
 def _derive_theme_name(input_path: Path) -> str:

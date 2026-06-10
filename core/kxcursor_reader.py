@@ -1,4 +1,5 @@
 import struct
+import subprocess
 import tarfile
 import zipfile
 from collections import defaultdict
@@ -19,7 +20,69 @@ _TYPE_IMAGE = 0xFFFD0002  # 单张图块(实际数据是带 36 字节 image head
 _IMAGE_HEADER_SIZE = 36
 
 # 支持自动解压的压缩包后缀(全部小写比对)
-_ARCHIVE_SUFFIXES = (".tar.xz", ".tar.gz", ".tgz", ".zip", ".tar", ".tar.bz2", ".tbz2")
+# 7z 优先级放最后, 因为 py7zr 不在标准库 (需 pip install py7zr)
+_ARCHIVE_SUFFIXES = (
+    ".tar.xz",
+    ".tar.gz",
+    ".tgz",
+    ".zip",
+    ".tar",
+    ".tar.bz2",
+    ".tbz2",
+    ".7z",
+)
+
+
+def _extract_7z(theme_path: Path, extracted_root: Path) -> None:
+    """
+    解压 7z 压缩包到 extracted_root.
+
+    优先使用 py7zr (纯 Python 实现), 如果不可用则回退到系统 7z 命令.
+
+    Args:
+        theme_path: 7z 文件路径
+        extracted_root: 解压目标目录
+
+    Raises:
+        RuntimeError: py7zr 和系统 7z 都不可用时抛出
+    """
+    # 方案 1: py7zr (纯 Python, 推荐)
+    try:
+        import py7zr  # type: ignore
+
+        with py7zr.SevenZipFile(theme_path, mode="r") as z:
+            z.extractall(path=extracted_root)
+        return
+    except ImportError:
+        pass  # py7zr 未安装, 回退到方案 2
+    except Exception as e:
+        raise RuntimeError(f"py7zr failed to extract {theme_path}: {e}") from e
+
+    # 方案 2: 系统 7z 命令
+    for cmd in ("7z", "7za", "7zr"):
+        try:
+            # 使用 -o<path> 语法指定输出目录 (注意 7z 的 -o 后面无空格)
+            subprocess.run(
+                [cmd, "x", str(theme_path), f"-o{extracted_root}", "-y"],
+                check=True,
+                capture_output=True,
+            )
+            return
+        except FileNotFoundError:
+            continue  # 尝试下一个命令
+        except subprocess.CalledProcessError as e:
+            stderr = e.stderr.decode("utf-8", errors="replace") if e.stderr else ""
+            raise RuntimeError(
+                f"{cmd} failed to extract {theme_path}: {stderr}"
+            ) from e
+
+    # 方案 1 和 2 都失败
+    raise RuntimeError(
+        f"Cannot extract 7z file {theme_path}: "
+        "py7zr not installed and no system 7z command found. "
+        "Install py7zr: pip3 install --user py7zr, "
+        "or install p7zip: brew install p7zip (macOS) / apt install p7zip-full (Linux)."
+    )
 
 
 def _parse_xcursor_bytes(data: bytes):
@@ -334,6 +397,9 @@ def discover_themes(theme_path: Path, out_root: Path = None, merge_similar: bool
         if theme_path.name.lower().endswith(".zip"):
             with zipfile.ZipFile(theme_path) as zf:
                 zf.extractall(extracted_root)
+        elif theme_path.name.lower().endswith(".7z"):
+            # 7z 解压: 优先 py7zr, 回退到系统 7z 命令
+            _extract_7z(theme_path, extracted_root)
         else:
             # Python 3.14+ tarfile 默认 data filter 会拒绝:
             #   1) symlink 指向绝对路径 (AbsoluteLinkError)

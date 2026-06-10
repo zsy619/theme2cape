@@ -4,7 +4,7 @@
 
 支持:
 
-- 7 种压缩格式: `.tar.xz` / `.tar.gz` / `.tgz` / `.zip` / `.tar` / `.tar.bz2` / `.tbz2`
+- 8 种压缩格式: `.tar.xz` / `.tar.gz` / `.tgz` / `.zip` / `.tar` / `.tar.bz2` / `.tbz2` / `.7z`
 - 单套主题 + 多套子主题 (一个压缩包内含 N 套颜色/样式变种)
 - KDE SVG 源主题 (自动 build SVG→XCursor, 需 cairosvg)
 - 通用 XCursor 主题目录变体: `cursors/`, `cursors_scalable/`, `cursors_pixmap/`, `cursors_svg/`, `cursors_left/`, `cursors_right/`
@@ -146,6 +146,7 @@ N 套中如有 ≥90% cursor 字节相同 (但不全相同), 仍输出 N 个 cap
 | ZIP | `.zip` |
 | 未压缩 tar | `.tar` |
 | Bzip2 压缩 tar | `.tar.bz2` / `.tbz2` |
+| 7-Zip | `.7z` (需 `pip3 install --user py7zr` 或 `brew install p7zip`) |
 
 ---
 
@@ -232,6 +233,7 @@ XCursor 主题里的某些 cursor (如 `wayland-cursor`, `x-cursor`) 是 X11 ser
 - (可选) `cairosvg` — KDE SVG 源主题自动 build
 - (可选) `rsvg-convert` / ImageMagick / inkscape — cairosvg 不可用时的备选 SVG 渲染器
 - (可选) `Pillow` — XCursor PNG 解码
+- (可选) `py7zr` 或系统 `7z`/`7za` — 处理 `.7z` 压缩包 (无 7z 主题可不装)
 
 ---
 
