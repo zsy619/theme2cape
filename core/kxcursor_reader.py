@@ -1,3 +1,6 @@
+import os
+import pathlib
+import shutil
 import struct
 import subprocess
 import tarfile
@@ -5,6 +8,133 @@ import zipfile
 from collections import defaultdict
 from pathlib import Path
 from core.cim import Cursor, CursorFrame
+
+
+def _make_case_insensitive_safe_symlink_to(orig):
+    """
+    返回一个 pathlib.PosixPath.symlink_to 的安全包装, 用于规避 macOS (APFS/HFS+
+    默认 case-insensitive) 上 7z 包内"大小写冲突 entry"导致的 FileExistsError.
+
+    触发场景:
+      7z 包内同时存在 'sizenesw_down' (小写) 和 'SizeNESW_Down' (大写) 两个
+      symlink entry, 它们都指向同一个 target. 在 case-insensitive 文件系统上,
+      这两个 entry 解压到同一路径, 第二个解压调用 os.symlink 报 FileExistsError
+      [Errno 17].
+
+    行为:
+      - 第一次直接调用 orig (正常路径, 无性能损失).
+      - 仅当抛 FileExistsError 且 self (即 dst 位置) 已被一个**不同 target 的
+        旧 symlink** 占用时, 才 unlink 旧 symlink 并重试.
+      - **绝不删除普通文件** (避免误删用户数据), 这种情况让原始错误抛出.
+      - 如果旧 symlink 的 target 与新 target 相同 (说明已经是想要的 symlink),
+        也不 unlink, 直接重试 (通常会再次报 FileExistsError, 让上游感知).
+
+    Args:
+        orig: 原 pathlib.PosixPath.symlink_to (将被装饰)
+
+    Returns:
+        装饰后的函数, 签名与 orig 兼容.
+    """
+
+    def _safe_symlink_to(self, target, target_is_directory=False):
+        # ---- 预防: 跳过 self-loop symlink (7z 包内 'arrow_down' -> 'arrow_down'
+        # 这类故意自循环的 placeholder). 正常创建后, 后续 py7zr 调 os.utime() 时
+        # 会 ELOOP [Errno 62]. 直接跳过这种 entry 即可.
+        try:
+            target_str = os.fspath(target)
+        except TypeError:
+            target_str = str(target)
+        if target_str:
+            target_abs = (
+                self.parent / target_str
+                if not os.path.isabs(target_str)
+                else pathlib.Path(target_str)
+            )
+            if str(target_abs) == str(self):
+                return  # self-loop, 静默跳过
+        try:
+            return orig(self, target, target_is_directory)
+        except FileExistsError:
+            # 仅在 self 已是 symlink (无论 target 是否相同) 时, 视为 case-insensitive
+            # 冲突. 7z 包内常出现 "sizenesw_down" 和 "SizeNESW_Down" 两个 symlink
+            # entry 都指向同一 target 的情况, 在 case-insensitive 文件系统上, 它们
+            # 在磁盘上是同一个文件, 第二个 os.symlink 必须先 unlink 才能写入.
+            # 严格的安全保证: 如果 self 不是 symlink 而是普通文件, 绝不 unlink,
+            # 让原始 FileExistsError 透传, 避免误删用户数据.
+            try:
+                if self.is_symlink():
+                    self.unlink()
+                    return orig(self, target, target_is_directory)
+            except OSError:
+                # readlink/unlink 自身失败 (例如权限), 让原始错误透传
+                pass
+            raise
+
+    return _safe_symlink_to
+
+
+def _make_eloop_safe(orig):
+    """
+    返回一个 syscall 的安全包装, 用于在 self-loop symlink (7z 包内
+    'arrow_down' -> 'arrow_down' 这类故意自循环的 placeholder) 上 ELOOP 时
+    静默跳过, 不影响其他正常调用.
+
+    触发场景:
+      py7zr 解压每个 entry 后调 os.utime() / os.chmod() 等保留元数据.
+      当 outfilename 是 self-loop symlink, 内核跟随解析会无限循环, 报
+      OSError [Errno 62] Too many levels of symbolic links.
+
+    行为:
+      - 正常路径直接调 orig (无性能损失).
+      - 仅当 errno == ELOOP (62) 时静默 return, 其他错误透传.
+      - 任何 FileNotFoundError 等也透传 (不掩盖其他问题).
+
+    Args:
+        orig: 原 syscall (将被装饰, 任意签名)
+
+    Returns:
+        装饰后的函数, 签名与 orig 兼容.
+    """
+
+    def _safe(*args, **kwargs):
+        try:
+            return orig(*args, **kwargs)
+        except OSError as e:
+            if getattr(e, "errno", None) == 62:  # ELOOP
+                return  # self-loop symlink, 静默跳过
+            raise
+
+    return _safe
+
+
+def _reset_extracted_root(extracted_root: Path) -> None:
+    """
+    在解压前清理 extracted_root 下的旧内容,避免上次中断/失败留下的文件导致
+    重跑时 py7zr / zipfile / tarfile 抛 FileExistsError 等冲突错误.
+
+    设计:
+      - 保留任何名为 "decoded" 的目录(里面是 read_xcursor 写出的 PNG 中间缓存,
+        重跑时 read_xcursor 会**覆盖式**写入,所以理论上可删;但保留更安全,
+        也避免极端情况下其他人手工加进来的产物被误删).
+      - 其他文件和目录一律删除,确保解压目标目录是干净状态.
+
+    Args:
+        extracted_root: 即将被解压覆盖的目录(可能不存在,也可能存在并含残留)
+    """
+    if not extracted_root.exists():
+        return
+    for p in extracted_root.iterdir():
+        # 保留 decoded/ 目录作为 PNG 缓存
+        if p.name == "decoded" and p.is_dir():
+            continue
+        try:
+            if p.is_dir() and not p.is_symlink():
+                shutil.rmtree(p)
+            else:
+                p.unlink()
+        except FileNotFoundError:
+            # 竞态: iterdir 之后文件被外部删除, 忽略
+            pass
 
 
 # XCursor 二进制格式常量
@@ -49,9 +179,64 @@ def _extract_7z(theme_path: Path, extracted_root: Path) -> None:
     # 方案 1: py7zr (纯 Python, 推荐)
     try:
         import py7zr  # type: ignore
+        from py7zr import py7zr as _py7zr_mod  # type: ignore
 
-        with py7zr.SevenZipFile(theme_path, mode="r") as z:
-            z.extractall(path=extracted_root)
+        # ---- monkey-patch 1: 强制 py7zr 走串行解压路径 ----
+        # py7zr.SevenZipFile._extract() 内部硬编码
+        #   parallel=(not self.password_protected and not self._filePassed)
+        # 当 7z 包不含密码时, 默认是 True (多线程并行解压).
+        # py7zr 1.1.0 的 extractall() 没暴露 parallel 参数, 没法从外部关并行.
+        # 直接 patch Worker.extract 让 parallel 永远为 False, 走 extract_single
+        # 串行路径, 避免 worker 之间的竞态 (例如 A 写 SizeNESW_Down 普通文件
+        # 与 B 创建 top_right_corner symlink 指向 SizeNESW_Down 的竞争).
+        if not getattr(_py7zr_mod.Worker.extract, "_patched_serial", False):
+            _orig_worker_extract = _py7zr_mod.Worker.extract
+
+            def _serial_worker_extract(self, fp, path, parallel, *args, **kwargs):
+                return _orig_worker_extract(self, fp, path, False, *args, **kwargs)
+
+            _serial_worker_extract._patched_serial = True  # type: ignore
+            _py7zr_mod.Worker.extract = _serial_worker_extract
+
+        # ---- monkey-patch 2: 解决 macOS 大小写不敏感文件系统的"7z entry
+        # 大小写冲突"问题 ----
+        # 背景: microzoa.7z 包内同时存在 'sizenesw_down' (小写) 和
+        # 'SizeNESW_Down' (大写) 两个 entry, 都是 symlink → 'top_right_corner'.
+        # Linux 上是两个不同文件, 但 macOS 的 APFS/HFS+ 默认是 case-insensitive,
+        # 这两个路径在文件系统层被视为同一个文件. py7zr 按 entry 顺序解压时:
+        #   1. 先解压 'sizenesw_down' → 创建 symlink 成功
+        #   2. 后解压 'SizeNESW_Down' → os.symlink 报 FileExistsError [Errno 17]
+        # 因为 macOS 把 'SizeNESW_Down' 视为已存在的 'sizenesw_down'.
+        #
+        # 修复: 临时 patch pathlib.PosixPath.symlink_to, 在遇到 FileExistsError
+        # 时检查 self 位置是否已被一个**旧 symlink** 占用 (即大小写冲突的
+        # case-insensitive 重复). 如果是, 安全地 unlink 后重试.
+        # **安全保证**: 仅当 self 已经是 symlink 才 unlink, 绝不删除普通文件
+        # (避免误删用户数据).
+        #
+        # 此外, 7z 包内经常含 "self-loop symlink" (e.g. 'arrow_down' -> 'arrow_down'
+        # 这种故意自循环的占位 entry). py7zr 解压后调 os.utime() / os.chmod() 保留
+        # 元数据时, 在 self-loop symlink 上会 ELOOP [Errno 62]. 同时临时 patch 这些
+        # syscall, 在 ELOOP 时静默跳过, 不影响其他正常调用.
+        # 全部 patch 都用 try/finally 在解压结束后恢复, 不污染进程内其他调用.
+        _orig_symlink_to = pathlib.PosixPath.symlink_to
+        _patched_symlink_to = _make_case_insensitive_safe_symlink_to(_orig_symlink_to)
+        # 包装 ELOOP 敏感 syscall: utime / chmod 等默认 follow_symlinks=True,
+        # 在 self-loop symlink 上会 ELOOP. chown / getxattr / setxattr 同理,
+        # 先把已确认出问题的加上, 后续如发现新问题再追加.
+        _eloop_safe_names = ("utime", "chmod")
+        _orig_safe = {n: getattr(os, n) for n in _eloop_safe_names}
+        _patched_safe = {n: _make_eloop_safe(orig) for n, orig in _orig_safe.items()}
+        pathlib.PosixPath.symlink_to = _patched_symlink_to  # type: ignore
+        for n, fn in _patched_safe.items():
+            setattr(os, n, fn)  # type: ignore
+        try:
+            with py7zr.SevenZipFile(theme_path, mode="r") as z:
+                z.extractall(path=extracted_root)
+        finally:
+            pathlib.PosixPath.symlink_to = _orig_symlink_to  # type: ignore
+            for n, fn in _orig_safe.items():
+                setattr(os, n, fn)  # type: ignore
         return
     except ImportError:
         pass  # py7zr 未安装, 回退到方案 2
@@ -381,6 +566,24 @@ def discover_themes(theme_path: Path, out_root: Path = None, merge_similar: bool
     if not theme_path.exists():
         raise FileNotFoundError(f"theme path not found: {theme_path}")
 
+    # ===== CursorFX 早分支 =====
+    # Stardock CursorFX 主题包有两种形态:
+    #   1) 目录形态: 带 .CursorFX 扩展名的目录(Windows shell compound document),
+    #      解压后是含 Scheme.ini + <Section>.png 的扁平目录.
+    #   2) 二进制文件形态: Stardock 私有打包格式, 需要用 cursorfx_binary_reader 解析.
+    # 与 XCursor 的 `cursors/<name>` 嵌套结构完全不同,需走独立 reader.
+    if theme_path.is_dir():
+        from core.cursorfx_reader import is_cursorfx_theme, read_cursorfx_theme
+        if is_cursorfx_theme(theme_path):
+            theme_name, cursors = read_cursorfx_theme(theme_path)
+            return [(theme_name, cursors)]
+    elif theme_path.is_file() and theme_path.suffix.lower() == ".cursorfx":
+        # CursorFX 二进制文件
+        from core.cursorfx_reader import is_cursorfx_theme, read_cursorfx_theme
+        if is_cursorfx_theme(theme_path):
+            theme_name, cursors = read_cursorfx_theme(theme_path)
+            return [(theme_name, cursors)]
+
     extracted_root: Path = None
     if _is_archive(theme_path):
         out_root = Path(out_root) if out_root else theme_path.parent
@@ -394,6 +597,10 @@ def discover_themes(theme_path: Path, out_root: Path = None, merge_similar: bool
                 break
         extracted_root = out_root / f"_extracted_{archive_theme_name}"
         extracted_root.mkdir(parents=True, exist_ok=True)
+        # 解压前先清理上次残留的文件,避免重跑时 FileExistsError 冲突
+        # (例如 microzoa.7z 上次解压到一半中断,留下了部分 cursors/ 文件 + symlink,
+        #  py7zr 再次解压时遇到 symlink 目标已存在就抛 FileExistsError)
+        _reset_extracted_root(extracted_root)
         if theme_path.name.lower().endswith(".zip"):
             with zipfile.ZipFile(theme_path) as zf:
                 zf.extractall(extracted_root)

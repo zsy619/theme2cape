@@ -5,8 +5,19 @@ from core.normalizer import normalize, reset_stats, get_stats, make_sha1_index
 from core.cape_builder import build_cape
 
 
-# 按优先级尝试剥掉这些压缩包后缀
-_ARCHIVE_EXTS = (".tar.xz", ".tar.gz", ".tgz", ".zip", ".tar", ".tar.bz2", ".tbz2", ".7z")
+# 按优先级尝试剥掉这些压缩包/主题包后缀
+# .cursorfx 放最后:它是 Windows shell 目录的扩展名,优先级低避免误剥
+_ARCHIVE_EXTS = (
+    ".tar.xz",
+    ".tar.gz",
+    ".tgz",
+    ".zip",
+    ".tar",
+    ".tar.bz2",
+    ".tbz2",
+    ".7z",
+    ".cursorfx",
+)
 
 
 def _derive_theme_name(input_path: Path) -> str:
@@ -40,6 +51,11 @@ def main():
     input_path = Path(args[0])
     out_dir = Path("out")
     base_theme_name = _derive_theme_name(input_path)
+
+    # ---- CursorFX 文件支持说明 ----
+    # .cursorfx 目录 → 已支持 (cursorfx_reader 路径, Scheme.ini + PNG)
+    # .cursorfx 文件 → 已支持 (cursorfx_binary_reader 路径, Stardock 二进制格式)
+    # 两种形态都会被 discover_themes() 自动识别并处理
 
     # 1. discover themes (永远 N 套 → N cape, 只合并 100% 字节相同的子主题)
     themes = discover_themes(input_path, out_dir)
